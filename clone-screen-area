@@ -1,0 +1,161 @@
+#!/usr/bin/env python
+import os
+import time
+import argparse
+
+try:
+    from Qt import QtWidgets, QtGui, QtCore
+except ImportError:
+    try:
+        from PyQt5 import QtWidgets, QtGui, QtCore
+    except ImportError:
+        from PyQt4 import QtGui, QtCore
+        QtWidgets = QtGui
+
+
+class Viewer(QtWidgets.QWidget):
+
+    DEFINE_TITLE = "Define Region (Click to Capture)"
+    VIEW_TITLE = "Cloned View (Double-Click to Redefine)"
+
+    SLOW = 200
+    FAST = 10
+
+    def __init__(self):
+        QtWidgets.QWidget.__init__(self)
+        self.setWindowTitle(self.DEFINE_TITLE)
+        self.setWindowFlags(QtCore.Qt.WindowStaysOnTopHint)
+
+        self._timer = QtCore.QTimer()
+        self._timer.setInterval(self.SLOW)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start()
+
+        self._cloning = False
+        self._source_rect = self.frameGeometry()
+        self._capture = capture_screen()
+
+    def _tick(self):
+        if self._cloning:
+            self._capture = capture_screen()
+            self.repaint()
+            return
+
+        # Update capture with everything outside the frame
+        frame_before = self.frameGeometry()
+        image = capture_screen().toImage()
+        frame_after = self.frameGeometry()
+        x = min(frame_before.x(), frame_after.x())
+        y = min(frame_before.y(), frame_after.y())
+        x1 = min(frame_before.x() + frame_before.width(),
+                 frame_after.x() + frame_after.width())
+        y1 = min(frame_before.y() + frame_before.height(),
+                 frame_after.y() + frame_after.height())
+        painter = QtGui.QPainter(image)
+        painter.drawPixmap(x, y, self._capture.copy(x, y, x1 - x, y1 - y))
+        painter.end()
+        self._capture = QtGui.QPixmap.fromImage(image)
+        self.repaint()
+
+    def moveEvent(self, e):
+        if not self._cloning:
+            self.redefineArea(self.frameGeometry())
+            self.repaint()
+        return QtWidgets.QWidget.moveEvent(self, e)
+
+    def resizeEvent(self, e):
+        if not self._cloning:
+            self.redefineArea(self.frameGeometry())
+        return QtWidgets.QWidget.resizeEvent(self, e)
+
+    def mouseDoubleClickEvent(self, e):
+        if self._cloning:
+            self.stopCloning()
+
+    def mousePressEvent(self, e):
+        if not self._cloning:
+            self.startCloning()
+
+    def redefineArea(self, area):
+        self._source_rect = area
+
+    def startCloning(self):
+        self._source_rect = frame = self.frameGeometry()
+        self._cloning = True
+        border = 4
+
+        # Expand frame such that the widget becomes the frame's size
+        inner = self.geometry()
+        new_x = 2 * frame.x() - inner.x()
+        new_y = 2 * frame.y() - inner.y()
+        self.move(new_x + frame.width() + border, new_y - border)
+        self.resize(frame.width() + 2 * border, frame.height() + 2 * border)
+
+        self.setWindowTitle(self.VIEW_TITLE)
+        self._timer.setInterval(self.FAST)
+
+    def stopCloning(self):
+        self._cloning = False
+
+        # Contract frame so its extents match the capture region
+        rect = self._source_rect
+        outer = self.frameGeometry()
+        inner = self.geometry()
+        pad_x = outer.width() - inner.width()
+        pad_y = outer.height() - inner.height()
+        self.move(rect.x(), rect.y())
+        self.resize(rect.width() - pad_x, rect.height() - pad_y)
+        g = self.geometry()
+
+        self.setWindowTitle(self.DEFINE_TITLE)
+        self._timer.setInterval(self.SLOW)
+        self._tick()
+
+    def paintEvent(self, e):
+        painter = QtGui.QPainter(self)
+        if not self._cloning:
+            painter.drawPixmap(0, 0, self._capture.copy(self.geometry()))
+            painter.fillRect(0, 0, self.width(), self.height(), QtGui.QColor(0, 255, 255, 32))
+            return
+
+        # Map global mouse position to position within this dialog, to draw it
+        pos = QtGui.QCursor.pos()
+        x = pos.x() - self._source_rect.x() + (self.width() - self._source_rect.width()) / 2
+        y = pos.y() - self._source_rect.y() + (self.height() - self._source_rect.height()) / 2
+        painter.fillRect(0, 0, self.width(), self.height(), QtGui.QColor(0, 0, 0))
+        painter.drawPixmap(
+            (self.width() - self._source_rect.width()) / 2,
+            (self.height() - self._source_rect.height()) / 2,
+            self._capture.copy(self._source_rect))
+
+        painter.setCompositionMode(painter.RasterOp_SourceXorDestination)
+        pointer = QtGui.QPainterPath()
+        pointer.moveTo(x, y)
+        pointer.lineTo(x, y + 18)
+        pointer.lineTo(x + 12, y + 12)
+        #painter.setPen(QtGui.QColor(255, 255, 255))
+        painter.fillPath(pointer, QtGui.QColor(255, 255, 255))
+        #painter.drawLine(x, y, x, y + 12);
+        #painter.drawLine(x, y, x + 8, y + 8);
+        #painter.drawLine(x, y + 12, x + 8, y + 8);
+
+
+def capture_screen():
+    if hasattr(QtWidgets.QApplication, "primaryScreen"):
+        screen = QtWidgets.QApplication.primaryScreen()
+        return screen.grabWindow(0)
+    else:
+        desk = QtWidgets.QApplication.desktop()
+        return QtWidgets.QPixmap.grabWindow(desk.winId())
+
+
+def main():
+    app = QtWidgets.QApplication([])
+    viewer = Viewer()
+    viewer.resize(320, 240)
+    viewer.show()
+    app.exec_()
+
+
+if __name__ == "__main__":
+    main()
